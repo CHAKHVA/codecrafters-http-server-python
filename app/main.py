@@ -8,8 +8,18 @@ def main():
     # Uncomment this to pass the first stage
 
     server_socket = socket.create_server(("localhost", 4221), reuse_port=True)
-    server_socket.accept()[0].send(b"HTTP/1.1 200 OK\r\n\r\n")
-    server_socket.accept()  # wait for client
+    sock, _ = server_socket.accept()  # wait for client
+    with sock:
+        data = sock.recv(1024)
+        request = data.decode()
+
+        path = request.split(" ")[1]
+        if path == "/":
+            response = "HTTP/1.1 200 OK\r\n"
+        else:
+            response = "HTTP/1.1 404 Not Found\r\n"
+
+        sock.sendall(response.encode())
 
 
 if __name__ == "__main__":
