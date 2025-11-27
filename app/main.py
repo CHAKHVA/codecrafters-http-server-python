@@ -15,9 +15,9 @@ def main():
 
         path = request.split(" ")[1]
         if path == "/":
-            response = "HTTP/1.1 200 OK\r\n"
+            response = "HTTP/1.1 200 OK\r\n\r\n"
         else:
-            response = "HTTP/1.1 404 Not Found\r\n"
+            response = "HTTP/1.1 404 Not Found\r\n\r\n"
 
         sock.sendall(response.encode())
 
