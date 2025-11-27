@@ -1,4 +1,5 @@
 import socket
+import threading
 from dataclasses import dataclass
 
 
@@ -79,6 +80,17 @@ def handle_echo(path_parts: list[str]) -> str:
     return build_response(404, "Not Found")
 
 
+def handle_user_agent(request: HTTPRequest) -> str:
+    """Handle requests to /user-agent"""
+    user_agent = request.headers.get("user-agent", "Unknown")
+    body = f"{user_agent}"
+    headers = {
+        "Content-Type": "text/plain",
+        "Content-Length": str(len(body)),
+    }
+    return build_response(200, "OK", headers, body)
+
+
 def handle_not_found() -> str:
     """Handle 404 responses."""
     return build_response(404, "Not Found")
@@ -94,6 +106,9 @@ def route_request(request: HTTPRequest) -> str:
 
     if len(path_parts) > 1 and path_parts[1] == "echo":
         return handle_echo(path_parts)
+
+    if path == "/user-agent":
+        return handle_user_agent(request)
 
     return handle_not_found()
 
@@ -130,7 +145,10 @@ def main():
         while True:
             client_socket, address = server_socket.accept()
             print(f"Connection from {address}")
-            handle_client(client_socket)
+            client_thread = threading.Thread(
+                target=handle_client, args=(client_socket,)
+            )
+            client_thread.start()
     except KeyboardInterrupt:
         print("\nShutting down server...")
     finally:
