@@ -8,7 +8,7 @@ def main():
     # Uncomment this to pass the first stage
 
     server_socket = socket.create_server(("localhost", 4221), reuse_port=True)
-    sock, _ = server_socket.accept()  # wait for client
+    sock, _ = server_socket.accept()
     with sock:
         data = sock.recv(1024)
         request = data.decode()
