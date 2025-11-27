@@ -1,4 +1,6 @@
+import os
 import socket
+import sys
 import threading
 from dataclasses import dataclass
 
@@ -91,12 +93,35 @@ def handle_user_agent(request: HTTPRequest) -> str:
     return build_response(200, "OK", headers, body)
 
 
+def handle_files(path_parts: list[str], directory: str) -> str:
+    """Handle requests to /files/{filename}"""
+    if len(path_parts) > 2:
+        filename = path_parts[2]
+        filepath = os.path.join(directory, filename)
+
+        if os.path.isfile(filepath):
+            try:
+                with open(filepath, "rb") as f:
+                    content = f.read()
+                headers = {
+                    "Content-Type": "application/octet-stream",
+                    "Content-Length": str(len(content)),
+                }
+                return build_response(200, "OK", headers, content.decode("utf-8"))
+            except Exception as e:
+                print(f"Error reading file: {e}")
+                return build_response(404, "Not Found")
+        else:
+            return build_response(404, "Not Found")
+    return build_response(404, "Not Found")
+
+
 def handle_not_found() -> str:
     """Handle 404 responses."""
     return build_response(404, "Not Found")
 
 
-def route_request(request: HTTPRequest) -> str:
+def route_request(request: HTTPRequest, directory: str = "") -> str:
     """Route request to appropriate handler."""
     path = request.path
     path_parts = path.split("/")
@@ -110,10 +135,13 @@ def route_request(request: HTTPRequest) -> str:
     if path == "/user-agent":
         return handle_user_agent(request)
 
+    if len(path_parts) > 1 and path_parts[1] == "files":
+        return handle_files(path_parts, directory)
+
     return handle_not_found()
 
 
-def handle_client(client_socket: socket.socket):
+def handle_client(client_socket: socket.socket, directory: str = ""):
     """Handle a single client connection."""
     try:
         with client_socket:
@@ -130,13 +158,18 @@ def handle_client(client_socket: socket.socket):
             print(f"[{request.method}] {request.path}")
             print(f"Headers: {request.headers}")
 
-            response = route_request(request)
+            response = route_request(request, directory)
             client_socket.sendall(response.encode("utf-8"))
     except Exception as e:
         print(f"Error handling client: {e}")
 
 
 def main():
+    directory = ""
+    if len(sys.argv) > 2 and sys.argv[1] == "--directory":
+        directory = sys.argv[2]
+        print(f"Serving files from: {directory}")
+
     print("Starting HTTP server on localhost:4221")
 
     server_socket = socket.create_server(("localhost", 4221), reuse_port=True)
@@ -146,7 +179,7 @@ def main():
             client_socket, address = server_socket.accept()
             print(f"Connection from {address}")
             client_thread = threading.Thread(
-                target=handle_client, args=(client_socket,)
+                target=handle_client, args=(client_socket, directory)
             )
             client_thread.start()
     except KeyboardInterrupt:
