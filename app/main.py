@@ -14,8 +14,14 @@ def main():
         request = data.decode()
 
         path = request.split(" ")[1]
+        path_chunks = path.split("/")
+        print(path_chunks)
         if path == "/":
             response = "HTTP/1.1 200 OK\r\n\r\n"
+        elif path_chunks[1] == "echo" and len(path_chunks) > 1:
+            response = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n{}".format(
+                len(path_chunks[2]), path_chunks[2]
+            )
         else:
             response = "HTTP/1.1 404 Not Found\r\n\r\n"
 
