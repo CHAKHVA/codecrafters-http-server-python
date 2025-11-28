@@ -93,26 +93,38 @@ def handle_user_agent(request: HTTPRequest) -> str:
     return build_response(200, "OK", headers, body)
 
 
-def handle_files(path_parts: list[str], directory: str) -> str:
+def handle_files(requests: HTTPRequest, directory: str) -> str:
     """Handle requests to /files/{filename}"""
+    path = requests.path
+    path_parts = path.split("/")
+
     if len(path_parts) > 2:
         filename = path_parts[2]
         filepath = os.path.join(directory, filename)
 
-        if os.path.isfile(filepath):
-            try:
-                with open(filepath, "rb") as f:
-                    content = f.read()
-                headers = {
-                    "Content-Type": "application/octet-stream",
-                    "Content-Length": str(len(content)),
-                }
-                return build_response(200, "OK", headers, content.decode("utf-8"))
-            except Exception as e:
-                print(f"Error reading file: {e}")
+        if requests.method == "GET":
+            if os.path.isfile(filepath):
+                try:
+                    with open(filepath, "rb") as f:
+                        content = f.read()
+                    headers = {
+                        "Content-Type": "application/octet-stream",
+                        "Content-Length": str(len(content)),
+                    }
+                    return build_response(200, "OK", headers, content.decode("utf-8"))
+                except Exception as e:
+                    print(f"Error reading file: {e}")
+                    return build_response(404, "Not Found")
+            else:
                 return build_response(404, "Not Found")
-        else:
-            return build_response(404, "Not Found")
+        elif requests.method == "POST":
+            try:
+                with open(filepath, "wb") as f:
+                    f.write(requests.body.encode("utf-8"))
+                return build_response(201, "Created")
+            except Exception as e:
+                print(f"Error writing file: {e}")
+                return build_response(404, "Not Found")
     return build_response(404, "Not Found")
 
 
@@ -136,7 +148,7 @@ def route_request(request: HTTPRequest, directory: str = "") -> str:
         return handle_user_agent(request)
 
     if len(path_parts) > 1 and path_parts[1] == "files":
-        return handle_files(path_parts, directory)
+        return handle_files(request, directory)
 
     return handle_not_found()
 
