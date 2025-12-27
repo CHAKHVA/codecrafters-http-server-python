@@ -5,13 +5,23 @@ import threading
 from dataclasses import dataclass
 
 
-@dataclass
+@dataclass(frozen=True)
 class HTTPRequest:
-    """Represents a parsed HTTP request."""
+    """Represents a HTTP request."""
 
     method: str
     path: str
     version: str
+    headers: dict[str, str]
+    body: str
+
+
+@dataclass(frozen=True)
+class HTTPResponse:
+    """Represents an HTTP response."""
+
+    status_code: int
+    status_text: str
     headers: dict[str, str]
     body: str
 
