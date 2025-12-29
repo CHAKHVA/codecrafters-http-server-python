@@ -76,9 +76,6 @@ class HTTPResponse:
         return response + b"\r\n" + body_bytes
 
 
-# ============================================================================
-# Request/Response Processing
-# ============================================================================
 class HTTPRequestParser:
     """Parse raw HTTP requests into structured data."""
 
@@ -170,9 +167,6 @@ class PathPrefixHandler(RouteHandler):
         return param if param else None
 
 
-# ============================================================================
-# Concrete Handlers
-# ============================================================================
 class RootHandler(RouteHandler):
     """Handle GET / requests."""
 
@@ -255,7 +249,6 @@ class FileHandler(PathPrefixHandler):
 
         filepath = self.directory / filename
 
-        # Security: prevent directory traversal
         try:
             resolved_path = filepath.resolve()
             if not resolved_path.is_relative_to(self.directory.resolve()):
@@ -263,11 +256,9 @@ class FileHandler(PathPrefixHandler):
         except (ValueError, OSError):
             return HTTPResponse(status=HTTPStatus.NOT_FOUND, headers={})
 
-        # Check if file exists
         if not resolved_path.is_file():
             return HTTPResponse(status=HTTPStatus.NOT_FOUND, headers={})
 
-        # Read file
         try:
             content = resolved_path.read_bytes()
             headers = {
@@ -287,7 +278,6 @@ class FileHandler(PathPrefixHandler):
 
         filepath = self.directory / filename
 
-        # Security: prevent directory traversal
         try:
             resolved_path = filepath.resolve()
             if not resolved_path.is_relative_to(self.directory.resolve()):
@@ -295,7 +285,6 @@ class FileHandler(PathPrefixHandler):
         except (ValueError, OSError):
             return HTTPResponse(status=HTTPStatus.NOT_FOUND, headers={})
 
-        # Write file
         try:
             resolved_path.write_bytes(request.body.encode("utf-8"))
             return HTTPResponse(status=HTTPStatus.CREATED, headers={})
@@ -316,9 +305,6 @@ class NotFoundHandler:
         return HTTPResponse(status=HTTPStatus.NOT_FOUND, headers={})
 
 
-# ============================================================================
-# Router
-# ============================================================================
 class HTTPRouter:
     """
     Route requests to handlers.
@@ -338,13 +324,9 @@ class HTTPRouter:
             if handler.matches(request):
                 return handler.handle(request)
 
-        # Should never reach here if NotFoundHandler is registered last
         return HTTPResponse(status=HTTPStatus.NOT_FOUND, headers={})
 
 
-# ============================================================================
-# Server
-# ============================================================================
 class HTTPServer:
     """Manages server lifecycle and client connections."""
 
@@ -404,9 +386,6 @@ class HTTPServer:
             self.server_socket.close()
 
 
-# ============================================================================
-# Application Bootstrap
-# ============================================================================
 def create_app(config: ServerConfig) -> HTTPServer:
     """
     Factory function to create a configured HTTP server application.
@@ -414,13 +393,11 @@ def create_app(config: ServerConfig) -> HTTPServer:
     """
     router = HTTPRouter()
 
-    # Register handlers in order (specific to general)
-    # First match wins, so order matters
     router.register(RootHandler())
     router.register(EchoHandler())
     router.register(UserAgentHandler())
     router.register(FileHandler(Path(config.file_directory or ".")))
-    router.register(NotFoundHandler())  # Catch-all must be last
+    router.register(NotFoundHandler())
 
     return HTTPServer(config, router)
 
