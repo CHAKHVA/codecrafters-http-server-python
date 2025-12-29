@@ -1,6 +1,3 @@
-# ============================================================================
-# Imports
-# ============================================================================
 import socket
 import sys
 import threading
@@ -10,9 +7,6 @@ from pathlib import Path
 from typing import Protocol
 
 
-# ============================================================================
-# Configuration
-# ============================================================================
 @dataclass(frozen=True)
 class ServerConfig:
     """Configuration for the HTTP server."""
@@ -23,9 +17,6 @@ class ServerConfig:
     file_directory: str = ""
 
 
-# ============================================================================
-# HTTP Abstractions
-# ============================================================================
 class HTTPStatus(IntEnum):
     """HTTP status codes with reason phrases."""
 
@@ -67,7 +58,9 @@ class HTTPResponse:
     def to_bytes(self) -> bytes:
         """Serialize response to HTTP wire format."""
         # Convert body to bytes if needed
-        body_bytes = self.body if isinstance(self.body, bytes) else self.body.encode("utf-8")
+        body_bytes = (
+            self.body if isinstance(self.body, bytes) else self.body.encode("utf-8")
+        )
 
         # Build response lines
         response_lines = [f"HTTP/1.1 {self.status} {self.status.reason_phrase}"]
@@ -163,9 +156,9 @@ class PathPrefixHandler(RouteHandler):
 
     def matches(self, request: HTTPRequest) -> bool:
         """Check if request path starts with the handler's pattern."""
-        return request.path.startswith(self.pattern) or request.path == self.pattern.rstrip(
-            "/"
-        )
+        return request.path.startswith(
+            self.pattern
+        ) or request.path == self.pattern.rstrip("/")
 
     def extract_path_param(self, request: HTTPRequest) -> str | None:
         """Extract the path parameter after the prefix."""
