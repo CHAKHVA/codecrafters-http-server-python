@@ -2,9 +2,8 @@ import socket
 import sys
 import threading
 from dataclasses import dataclass
-from enum import IntEnum
+from enum import Enum
 from pathlib import Path
-from typing import Protocol
 
 
 @dataclass(frozen=True)
@@ -17,23 +16,23 @@ class ServerConfig:
     file_directory: str = ""
 
 
-class HTTPStatus(IntEnum):
+class HTTPStatus(Enum):
     """HTTP status codes with reason phrases."""
 
-    OK = 200
-    CREATED = 201
-    NOT_FOUND = 404
-    INTERNAL_SERVER_ERROR = 500
+    OK = (200, "OK")
+    CREATED = (201, "Created")
+    NOT_FOUND = (404, "Not Found")
+    INTERNAL_SERVER_ERROR = (500, "Internal Server Error")
 
     @property
-    def reason_phrase(self) -> str:
-        """Get the reason phrase for this status code."""
-        return {
-            200: "OK",
-            201: "Created",
-            404: "Not Found",
-            500: "Internal Server Error",
-        }[self.value]
+    def code(self) -> int:
+        """Get the HTTP status code."""
+        return self.value[0]
+
+    @property
+    def phrase(self) -> str:
+        """Get the HTTP reason phrase."""
+        return self.value[1]
 
 
 @dataclass(frozen=True)
@@ -53,286 +52,180 @@ class HTTPResponse:
 
     status: HTTPStatus
     headers: dict[str, str]
-    body: bytes | str = ""
+    body: bytes | str = b""
 
     def to_bytes(self) -> bytes:
         """Serialize response to HTTP wire format."""
-        # Convert body to bytes if needed
         body_bytes = (
             self.body if isinstance(self.body, bytes) else self.body.encode("utf-8")
         )
 
-        # Build response lines
-        response_lines = [f"HTTP/1.1 {self.status} {self.status.reason_phrase}"]
+        response_lines = [f"HTTP/1.1 {self.status.code} {self.status.phrase}"]
 
-        # Add headers
         for name, value in self.headers.items():
             response_lines.append(f"{name}: {value}")
 
-        # Add empty line and body
         response_lines.append("")
         response = "\r\n".join(response_lines).encode("utf-8")
 
         return response + b"\r\n" + body_bytes
 
 
-class HTTPRequestParser:
-    """Parse raw HTTP requests into structured data."""
+def parse_request(raw_request: bytes) -> HTTPRequest | None:
+    """Parse raw HTTP request bytes into HTTPRequest object."""
+    try:
+        raw_str = raw_request.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
 
-    @staticmethod
-    def parse(raw_request: bytes) -> HTTPRequest | None:
-        """Parse raw HTTP request bytes into HTTPRequest object."""
-        try:
-            raw_str = raw_request.decode("utf-8")
-        except UnicodeDecodeError:
-            return None
+    lines = raw_str.split("\r\n")
 
-        lines = raw_str.split("\r\n")
+    # Parse request line
+    request_line = lines[0].split(" ")
+    if len(request_line) < 3:
+        return None
 
-        # Parse request line
-        request_line = lines[0].split(" ")
-        if len(request_line) < 3:
-            return None
+    method, path, version = request_line[0], request_line[1], request_line[2]
 
-        method, path, version = request_line[0], request_line[1], request_line[2]
+    # Parse headers
+    headers = {}
+    idx = 1
+    while idx < len(lines) and lines[idx]:
+        header_line = lines[idx]
+        if ": " in header_line:
+            key, value = header_line.split(": ", 1)
+            headers[key.lower()] = value
+        idx += 1
 
-        # Parse headers
-        headers = {}
-        idx = 1
-        while idx < len(lines) and lines[idx]:
-            header_line = lines[idx]
-            if ": " in header_line:
-                key, value = header_line.split(": ", 1)
-                headers[key.lower()] = value
-            idx += 1
+    # Parse body
+    body = "\r\n".join(lines[idx + 1 :]) if idx < len(lines) - 1 else ""
 
-        # Parse body
-        body = "\r\n".join(lines[idx + 1 :]) if idx < len(lines) - 1 else ""
+    return HTTPRequest(
+        method=method,
+        path=path,
+        version=version,
+        headers=headers,
+        body=body,
+    )
 
-        return HTTPRequest(
-            method=method,
-            path=path,
-            version=version,
-            headers=headers,
-            body=body,
+
+def handle_root(request: HTTPRequest) -> HTTPResponse:
+    """Handle GET / requests."""
+    return HTTPResponse(status=HTTPStatus.OK, headers={}, body=b"")
+
+
+def handle_echo(request: HTTPRequest, path_param: str) -> HTTPResponse:
+    """Handle GET /echo/{str} requests."""
+    body = path_param.encode("utf-8")
+    headers = {
+        "Content-Type": "text/plain",
+        "Content-Length": str(len(body)),
+    }
+    return HTTPResponse(status=HTTPStatus.OK, headers=headers, body=body)
+
+
+def handle_user_agent(request: HTTPRequest) -> HTTPResponse:
+    """Handle GET /user-agent requests."""
+    user_agent = request.headers.get("user-agent", "Unknown")
+    body = user_agent.encode("utf-8")
+    headers = {
+        "Content-Type": "text/plain",
+        "Content-Length": str(len(body)),
+    }
+    return HTTPResponse(status=HTTPStatus.OK, headers=headers, body=body)
+
+
+def handle_file_get(filename: str, directory: Path) -> HTTPResponse:
+    """Handle GET request to read a file."""
+    filepath = directory / filename
+
+    # Security: prevent directory traversal
+    try:
+        resolved_path = filepath.resolve()
+        if not resolved_path.is_relative_to(directory.resolve()):
+            return HTTPResponse(status=HTTPStatus.NOT_FOUND, headers={}, body=b"")
+    except (ValueError, OSError):
+        return HTTPResponse(status=HTTPStatus.NOT_FOUND, headers={}, body=b"")
+
+    # Check if file exists
+    if not resolved_path.is_file():
+        return HTTPResponse(status=HTTPStatus.NOT_FOUND, headers={}, body=b"")
+
+    # Read file
+    try:
+        content = resolved_path.read_bytes()
+        headers = {
+            "Content-Type": "application/octet-stream",
+            "Content-Length": str(len(content)),
+        }
+        return HTTPResponse(status=HTTPStatus.OK, headers=headers, body=content)
+    except OSError as e:
+        print(f"Error reading file: {e}")
+        return HTTPResponse(
+            status=HTTPStatus.INTERNAL_SERVER_ERROR, headers={}, body=b""
         )
 
 
-# ============================================================================
-# Handler Protocol & Base Classes
-# ============================================================================
-class HandlerProtocol(Protocol):
-    """Protocol defining the interface for request handlers."""
+def handle_file_post(filename: str, body: str, directory: Path) -> HTTPResponse:
+    """Handle POST request to create/write a file."""
+    filepath = directory / filename
 
-    def matches(self, request: HTTPRequest) -> bool:
-        """Check if this handler can handle the given request."""
-        ...
+    # Security: prevent directory traversal
+    try:
+        resolved_path = filepath.resolve()
+        if not resolved_path.is_relative_to(directory.resolve()):
+            return HTTPResponse(status=HTTPStatus.NOT_FOUND, headers={}, body=b"")
+    except (ValueError, OSError):
+        return HTTPResponse(status=HTTPStatus.NOT_FOUND, headers={}, body=b"")
 
-    def handle(self, request: HTTPRequest) -> HTTPResponse:
-        """Handle the request and return a response."""
-        ...
-
-
-class RouteHandler:
-    """Base class for route handlers."""
-
-    def __init__(self, pattern: str):
-        self.pattern = pattern
-
-    def matches(self, request: HTTPRequest) -> bool:
-        """Default implementation: exact path match."""
-        return request.path == self.pattern
-
-    def handle(self, request: HTTPRequest) -> HTTPResponse:
-        """Handle the request. Must be overridden by subclasses."""
-        raise NotImplementedError
+    # Write file
+    try:
+        resolved_path.write_bytes(body.encode("utf-8"))
+        return HTTPResponse(status=HTTPStatus.CREATED, headers={}, body=b"")
+    except OSError as e:
+        print(f"Error writing file: {e}")
+        return HTTPResponse(
+            status=HTTPStatus.INTERNAL_SERVER_ERROR, headers={}, body=b""
+        )
 
 
-class PathPrefixHandler(RouteHandler):
-    """Handler for routes with path prefixes like /echo/* or /files/*."""
-
-    def matches(self, request: HTTPRequest) -> bool:
-        """Check if request path starts with the handler's pattern."""
-        return request.path.startswith(
-            self.pattern
-        ) or request.path == self.pattern.rstrip("/")
-
-    def extract_path_param(self, request: HTTPRequest) -> str | None:
-        """Extract the path parameter after the prefix."""
-        if not request.path.startswith(self.pattern):
-            return None
-
-        # Extract everything after the prefix
-        param = request.path[len(self.pattern) :]
-        return param if param else None
-
-
-class RootHandler(RouteHandler):
-    """Handle GET / requests."""
-
-    def __init__(self):
-        super().__init__("/")
-
-    def matches(self, request: HTTPRequest) -> bool:
-        return request.path == "/" and request.method == "GET"
-
-    def handle(self, request: HTTPRequest) -> HTTPResponse:
-        return HTTPResponse(status=HTTPStatus.OK, headers={})
-
-
-class EchoHandler(PathPrefixHandler):
-    """Handle GET /echo/{str} requests."""
-
-    def __init__(self):
-        super().__init__("/echo/")
-
-    def matches(self, request: HTTPRequest) -> bool:
-        return request.path.startswith("/echo/") and request.method == "GET"
-
-    def handle(self, request: HTTPRequest) -> HTTPResponse:
-        echo_str = self.extract_path_param(request)
-        if not echo_str:
-            return HTTPResponse(status=HTTPStatus.NOT_FOUND, headers={})
-
-        body = echo_str.encode("utf-8")
-        headers = {
-            "Content-Type": "text/plain",
-            "Content-Length": str(len(body)),
-        }
-        return HTTPResponse(status=HTTPStatus.OK, headers=headers, body=body)
-
-
-class UserAgentHandler(RouteHandler):
-    """Handle GET /user-agent requests."""
-
-    def __init__(self):
-        super().__init__("/user-agent")
-
-    def matches(self, request: HTTPRequest) -> bool:
-        return request.path == "/user-agent" and request.method == "GET"
-
-    def handle(self, request: HTTPRequest) -> HTTPResponse:
-        user_agent = request.headers.get("user-agent", "Unknown")
-        body = user_agent.encode("utf-8")
-        headers = {
-            "Content-Type": "text/plain",
-            "Content-Length": str(len(body)),
-        }
-        return HTTPResponse(status=HTTPStatus.OK, headers=headers, body=body)
-
-
-class FileHandler(PathPrefixHandler):
+def handle_files(request: HTTPRequest, filename: str, directory: Path) -> HTTPResponse:
     """Handle GET and POST /files/{filename} requests."""
-
-    def __init__(self, directory: Path):
-        super().__init__("/files/")
-        self.directory = directory
-
-    def matches(self, request: HTTPRequest) -> bool:
-        return request.path.startswith("/files/") and request.method in ("GET", "POST")
-
-    def handle(self, request: HTTPRequest) -> HTTPResponse:
-        """Route to appropriate method handler."""
-        match request.method:
-            case "GET":
-                return self._handle_get(request)
-            case "POST":
-                return self._handle_post(request)
-            case _:
-                return HTTPResponse(status=HTTPStatus.NOT_FOUND, headers={})
-
-    def _handle_get(self, request: HTTPRequest) -> HTTPResponse:
-        """Handle GET request to read a file."""
-        filename = self.extract_path_param(request)
-        if not filename:
-            return HTTPResponse(status=HTTPStatus.NOT_FOUND, headers={})
-
-        filepath = self.directory / filename
-
-        try:
-            resolved_path = filepath.resolve()
-            if not resolved_path.is_relative_to(self.directory.resolve()):
-                return HTTPResponse(status=HTTPStatus.NOT_FOUND, headers={})
-        except (ValueError, OSError):
-            return HTTPResponse(status=HTTPStatus.NOT_FOUND, headers={})
-
-        if not resolved_path.is_file():
-            return HTTPResponse(status=HTTPStatus.NOT_FOUND, headers={})
-
-        try:
-            content = resolved_path.read_bytes()
-            headers = {
-                "Content-Type": "application/octet-stream",
-                "Content-Length": str(len(content)),
-            }
-            return HTTPResponse(status=HTTPStatus.OK, headers=headers, body=content)
-        except OSError as e:
-            print(f"Error reading file: {e}")
-            return HTTPResponse(status=HTTPStatus.INTERNAL_SERVER_ERROR, headers={})
-
-    def _handle_post(self, request: HTTPRequest) -> HTTPResponse:
-        """Handle POST request to create/write a file."""
-        filename = self.extract_path_param(request)
-        if not filename:
-            return HTTPResponse(status=HTTPStatus.NOT_FOUND, headers={})
-
-        filepath = self.directory / filename
-
-        try:
-            resolved_path = filepath.resolve()
-            if not resolved_path.is_relative_to(self.directory.resolve()):
-                return HTTPResponse(status=HTTPStatus.NOT_FOUND, headers={})
-        except (ValueError, OSError):
-            return HTTPResponse(status=HTTPStatus.NOT_FOUND, headers={})
-
-        try:
-            resolved_path.write_bytes(request.body.encode("utf-8"))
-            return HTTPResponse(status=HTTPStatus.CREATED, headers={})
-        except OSError as e:
-            print(f"Error writing file: {e}")
-            return HTTPResponse(status=HTTPStatus.INTERNAL_SERVER_ERROR, headers={})
+    match request.method:
+        case "GET":
+            return handle_file_get(filename, directory)
+        case "POST":
+            return handle_file_post(filename, request.body, directory)
+        case _:
+            return HTTPResponse(status=HTTPStatus.NOT_FOUND, headers={}, body=b"")
 
 
-class NotFoundHandler:
-    """Fallback handler for 404 responses."""
+def route_request(request: HTTPRequest, file_directory: Path) -> HTTPResponse:
+    """Route request to appropriate handler."""
+    # Exact match routes
+    if request.path == "/" and request.method == "GET":
+        return handle_root(request)
+    if request.path == "/user-agent" and request.method == "GET":
+        return handle_user_agent(request)
 
-    def matches(self, request: HTTPRequest) -> bool:
-        """Always matches - serves as catch-all."""
-        return True
+    # Prefix match routes
+    if request.path.startswith("/echo/") and request.method == "GET":
+        path_param = request.path[6:]  # Remove "/echo/"
+        return handle_echo(request, path_param)
 
-    def handle(self, request: HTTPRequest) -> HTTPResponse:
-        """Return 404 Not Found."""
-        return HTTPResponse(status=HTTPStatus.NOT_FOUND, headers={})
+    if request.path.startswith("/files/") and request.method in ("GET", "POST"):
+        filename = request.path[7:]  # Remove "/files/"
+        return handle_files(request, filename, file_directory)
 
-
-class HTTPRouter:
-    """
-    Route requests to handlers.
-    Implements Open/Closed Principle: open for extension, closed for modification.
-    """
-
-    def __init__(self):
-        self.handlers: list[HandlerProtocol] = []
-
-    def register(self, handler: HandlerProtocol) -> None:
-        """Register a handler. Order matters - first match wins."""
-        self.handlers.append(handler)
-
-    def route(self, request: HTTPRequest) -> HTTPResponse:
-        """Find the first matching handler and delegate the request."""
-        for handler in self.handlers:
-            if handler.matches(request):
-                return handler.handle(request)
-
-        return HTTPResponse(status=HTTPStatus.NOT_FOUND, headers={})
+    # 404 Not Found
+    return HTTPResponse(status=HTTPStatus.NOT_FOUND, headers={}, body=b"")
 
 
 class HTTPServer:
     """Manages server lifecycle and client connections."""
 
-    def __init__(self, config: ServerConfig, router: HTTPRouter):
+    def __init__(self, config: ServerConfig):
         self.config = config
-        self.router = router
         self.server_socket: socket.socket | None = None
 
     def start(self) -> None:
@@ -367,14 +260,15 @@ class HTTPServer:
                 if not data:
                     return
 
-                request = HTTPRequestParser.parse(data)
+                request = parse_request(data)
                 if not request:
                     print("Failed to parse request")
                     return
 
                 print(f"[{request.method}] {request.path}")
 
-                response = self.router.route(request)
+                file_directory = Path(self.config.file_directory or ".")
+                response = route_request(request, file_directory)
                 response_bytes = response.to_bytes()
                 client_socket.sendall(response_bytes)
         except Exception as e:
@@ -384,22 +278,6 @@ class HTTPServer:
         """Clean up server resources."""
         if self.server_socket:
             self.server_socket.close()
-
-
-def create_app(config: ServerConfig) -> HTTPServer:
-    """
-    Factory function to create a configured HTTP server application.
-    Implements Dependency Inversion: wires up dependencies.
-    """
-    router = HTTPRouter()
-
-    router.register(RootHandler())
-    router.register(EchoHandler())
-    router.register(UserAgentHandler())
-    router.register(FileHandler(Path(config.file_directory or ".")))
-    router.register(NotFoundHandler())
-
-    return HTTPServer(config, router)
 
 
 def parse_cli_args() -> ServerConfig:
@@ -415,8 +293,8 @@ def parse_cli_args() -> ServerConfig:
 def main() -> None:
     """Application entry point."""
     config = parse_cli_args()
-    app = create_app(config)
-    app.start()
+    server = HTTPServer(config)
+    server.start()
 
 
 if __name__ == "__main__":
